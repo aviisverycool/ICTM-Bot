@@ -34,8 +34,15 @@ user_problems = {}
 # wrap instead of producing a giant unreadable image), math kept in math mode,
 # Unicode math symbols mapped to LaTeX commands, and \large for legibility.
 
-ENV_PATTERN = r"\\begin\{(?P<env>\w+\*?)\}.*?\\end\{(?P=env)\}"
-MATH_PATTERN = re.compile(rf"({ENV_PATTERN}|\$([^$]*)\$|\\\[(.*?)\\\])", re.DOTALL)
+ENV_PATTERN = r"\\begin\{(?P<env>\w+\*?)\}(?P<envbody>.*?)\\end\{(?P=env)\}"
+MATH_PATTERN = re.compile(
+    r"(?P<envm>" + ENV_PATTERN + r")"
+    r"|(?P<inl>\$(?P<inlbody>[^$]*)\$)"
+    r"|(?P<paren>\\\((?P<parenbody>.*?)\\\))"
+    r"|(?P<disp>\\\[(?P<dispbody>.*?)\\\])",
+    re.DOTALL,
+)
+ENV_MAP = {"align*": "aligned", "align": "aligned", "gather*": "gathered", "gather": "gathered"}
 PLAIN_MATH_PATTERN = re.compile(r"([^\s{}_^]+[\^_]\{[^{}]*\})")
 
 UNICODE_TO_LATEX = {
@@ -61,37 +68,57 @@ UNICODE_TO_LATEX = {
 
 def escape_latex_text(seg):
     """Escape a plain-text segment so it is safe inside LaTeX text mode."""
+    seg = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", seg)
+    seg = seg.replace("\t", " ")
     seg = re.sub(r"\*\*(.+?)\*\*", lambda m: "\x04" + m.group(1) + "\x05", seg)
     seg = seg.replace("`", "")
     seg = seg.replace("\n\n", "\x01")
     seg = seg.replace("\n", "\x02")
     seg = seg.replace("\\\\", "\x03")
-    seg = seg.replace("%", r"\%")
-    seg = seg.replace("#", r"\#")
-    seg = seg.replace("&", r"\&")
-    seg = seg.replace("_", r"\_")
-    seg = seg.replace("{", r"\{")
-    seg = seg.replace("}", r"\}")
-    seg = seg.replace("~", r"\textasciitilde{}")
-    seg = seg.replace("^", r"\textasciicircum{}")
-    seg = seg.replace("$", r"\$")
-    seg = seg.replace("\\", r"\textbackslash{}")
+    seg = seg.replace("\\", "\x11")
+    seg = seg.replace("%", "\x06")
+    seg = seg.replace("#", "\x07")
+    seg = seg.replace("&", "\x08")
+    seg = seg.replace("_", "\x09")
+    seg = seg.replace("{", "\x0a")
+    seg = seg.replace("}", "\x0d")
+    seg = seg.replace("~", "\x0e")
+    seg = seg.replace("^", "\x0f")
+    seg = seg.replace("$", "\x10")
+    seg = seg.replace("\x11", r"\textbackslash{}")
+    seg = seg.replace("\x06", r"\%")
+    seg = seg.replace("\x07", r"\#")
+    seg = seg.replace("\x08", r"\&")
+    seg = seg.replace("\x09", r"\_")
+    seg = seg.replace("\x0a", r"\{")
+    seg = seg.replace("\x0d", r"\}")
+    seg = seg.replace("\x0e", r"\textasciitilde{}")
+    seg = seg.replace("\x0f", r"\textasciicircum{}")
+    seg = seg.replace("\x10", r"\textdollar{}")
     seg = seg.replace("\x04", r"\textbf{")
     seg = seg.replace("\x05", "}")
     seg = seg.replace("\x01", r"\\[6pt]")
     seg = seg.replace("\x02", " ")
     seg = seg.replace("\x03", r"\\[2pt]")
     for ch, tex in UNICODE_TO_LATEX.items():
-        seg = seg.replace(ch, tex)
+        seg = seg.replace(ch, "\x0b" + tex + "\x0c")
     return seg
 
 def clean_math(seg, keep_amp=False):
-    """Normalize a raw math segment for use inside $...$."""
+    """Normalize a raw math segment for use in math mode."""
+    seg = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", seg)
+    seg = seg.replace("\t", " ")
     seg = seg.replace("\r", "").replace("\n", " ")
     seg = re.sub(r"^\\(?: |qquad|quad)", "", seg)
     seg = re.sub(r"\\hspace\*?\{[^}]*\}$", "", seg)
     seg = re.sub(r"\\(?:qquad|quad)$", "", seg)
     seg = seg.strip()
+    saved = []
+    seg = re.sub(r"\\text\{[^{}]*\}", lambda m: saved.append(m.group(0)) or f"\x7f{len(saved) - 1}\x7f", seg)
+    for ch, tex in UNICODE_TO_LATEX.items():
+        if ch in seg:
+            seg = seg.replace(ch, tex[1:-1] if tex.startswith("$") else tex)
+    seg = re.sub(r"\x7f\d+\x7f", lambda m: saved[int(m.group(0)[1:-1])], seg)
     seg = re.sub(r"(?<!\\)%", r"\%", seg)
     seg = re.sub(r"(?<!\\)#", r"\#", seg)
     if not keep_amp:
@@ -100,91 +127,176 @@ def clean_math(seg, keep_amp=False):
     seg = seg.replace("`", "")
     return seg
 
-def text_to_tex(seg):
-    """Convert a plain-text segment (possibly with plaintext math) to LaTeX."""
-    out = []
+def text_to_formula_parts(seg):
+    """Split a plain-text segment into ('text', ...) and ('math', ...) parts."""
+    parts = []
     for i, part in enumerate(PLAIN_MATH_PATTERN.split(seg)):
         if not part:
             continue
         if i % 2 == 1:
             math = clean_math(part)
             if math:
-                out.append("$" + math + "$")
+                parts.append(("math", math))
         else:
-            out.append(escape_latex_text(part))
-    return "".join(out)
+            escaped = escape_latex_text(part)
+            buf = []
+            for sub in re.split(r"(\x0b.*?\x0c)", escaped):
+                if not sub:
+                    continue
+                if sub.startswith("\x0b"):
+                    body = sub[1:-1]
+                    if body.startswith("$") and body.endswith("$"):
+                        body = body[1:-1]
+                    parts.append(("math", body))
+                else:
+                    buf.append(sub)
+            if buf:
+                parts.append(("text", "".join(buf)))
+    return parts
 
-def latex_body(text):
-    """Convert text (math delimiters + plaintext math + escaped text) to LaTeX."""
-    text = text.replace("\r", "").strip()
+def normalize_math_newlines(text):
+    """Collapse newlines inside math spans so per-line splitting stays safe."""
     out = []
     pos = 0
     for m in MATH_PATTERN.finditer(text):
-        out.append(text_to_tex(text[pos:m.start()]))
-        if m.group(1) is not None:
-            math = clean_math(m.group(1), keep_amp=True)
-            if math:
-                out.append(math)
-        else:
-            math = clean_math(m.group(3) or m.group(4))
-            if math:
-                out.append("$" + math + "$")
+        out.append(text[pos:m.start()])
+        out.append(re.sub(r"\s*\n+\s*", " ", m.group(0)))
         pos = m.end()
-    out.append(text_to_tex(text[pos:]))
+    out.append(text[pos:])
     return "".join(out)
 
-def text_to_latex(text):
-    """Convert mixed plaintext/LaTeX text into a CodeCogs-renderable formula."""
-    return "\\large\\text{\\parbox{13cm}{" + latex_body(text) + "}}"
-
-def choices_to_tex(choices):
-    """Format answer choices as a horizontal LaTeX line."""
+def line_formula(seg):
+    """Convert one source line into a CodeCogs-renderable formula."""
     parts = []
+    pos = 0
+    for m in MATH_PATTERN.finditer(seg):
+        parts.extend(text_to_formula_parts(seg[pos:m.start()]))
+        if m.group("envm") is not None:
+            env = m.group("env")
+            body = clean_math(m.group("envbody"), keep_amp=True)
+            mapped = ENV_MAP.get(env, env)
+            if mapped != env:
+                body = re.sub(r"^\{\d+\}", "", body)
+            body = body.replace("&", r"\quad ")
+            parts.append(("math", f"\\begin{{{mapped}}} {body} \\end{{{mapped}}}"))
+        else:
+            body = m.group("inlbody")
+            if body is None:
+                body = m.group("parenbody")
+            if body is None:
+                body = m.group("dispbody")
+            math = clean_math(body or "")
+            if math:
+                parts.append(("math", math))
+        pos = m.end()
+    parts.extend(text_to_formula_parts(seg[pos:]))
+    parts = [(k, t.strip()) for k, t in parts if (k, t.strip()) != ("text", "")]
+    if not parts:
+        return None
+    if all(k == "text" for k, _ in parts):
+        text = " ".join(t for _, t in parts)
+        if len(text) > 100:
+            return "\\large\\text{\\parbox{13cm}{" + text + "}}"
+        return "\\large\\text{" + text + "}"
+    return "\\large " + " ".join("\\text{" + t + "}" if k == "text" else t for k, t in parts)
+
+def text_to_lines(text):
+    """Split text into per-line formulas; None marks a paragraph break."""
+    text = normalize_math_newlines(text.replace("\r", "").strip())
+    lines = []
+    prev_blank = False
+    for raw in text.split("\n"):
+        line = raw.strip()
+        if not line:
+            prev_blank = True
+            continue
+        if prev_blank:
+            lines.append(None)
+        prev_blank = False
+        f = line_formula(line)
+        if f:
+            lines.append(f)
+    return lines
+
+def choices_line(choices):
+    """Format answer choices as a single formula line."""
+    parts = [("text", "\\textbf{Choices:}")]
     for letter, value in sorted(choices.items()):
         v = value.replace("$", "").strip()
+        parts.append(("math", "\\quad"))
+        parts.append(("text", f"({letter}) "))
         if "\\" in v or "$" in v:
-            v = "$" + clean_math(v) + "$"
+            math = clean_math(v)
+            if math:
+                parts.append(("math", math))
         else:
-            v = escape_latex_text(v)
-        parts.append(f"({letter}) {v}")
-    return "\\textbf{Choices:} \\qquad " + "\\qquad ".join(parts)
+            parts.append(("text", escape_latex_text(v)))
+    return "\\large " + " ".join("\\text{" + t + "}" if k == "text" else t for k, t in parts)
 
 def problem_formula(comp_name, problem_id, problem_text, choices=None):
-    body = []
-    body.append("\\textbf{" + escape_latex_text(f"{comp_name} - Problem {problem_id}") + "}")
-    body.append(latex_body(problem_text))
+    """Build a list of per-line formulas (None = paragraph break)."""
+    lines = []
+    header = escape_latex_text(f"{comp_name} - Problem {problem_id}")
+    lines.append("\\large\\text{\\parbox{13cm}{\\textbf{" + header + "}}}")
+    lines.extend(text_to_lines(problem_text))
     if choices:
-        body.append(choices_to_tex(choices))
-    return "\\large\\text{\\parbox{13cm}{" + "\\\\[8pt]".join(body) + "}}"
+        lines.append(None)
+        lines.append(choices_line(choices))
+    return lines
 
 def solution_formula(result_text, solution_text=None):
-    body = [text_to_tex(result_text)]
+    """Build a list of per-line formulas (None = paragraph break)."""
+    lines = text_to_lines(result_text)
     if solution_text:
-        body.append(r"\textbf{Solution:}\ " + latex_body(solution_text))
-    return "\\large\\text{\\parbox{13cm}{" + "\\\\[8pt]".join(body) + "}}"
+        lines.append(None)
+        lines.append("\\large\\text{\\parbox{13cm}{\\textbf{Solution:}}}")
+        lines.extend(text_to_lines(solution_text))
+    return lines
 
-async def render_latex(formula, filename="latex.png"):
-    """Render a LaTeX formula as a PNG image (white background, black text, padded)."""
-    formula = "\\bg{white} " + formula
-    url = "https://latex.codecogs.com/png.image?" + urllib.parse.quote(formula)
+async def render_latex(lines, filename="latex.png"):
+    """Render per-line LaTeX formulas, stacked into one padded PNG image."""
+    pad = 16
+    line_gap = 4
+    para_gap = 10
     async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(url, timeout=10) as resp:
-                if resp.status == 200:
+        images = []
+        for line in lines:
+            if line is None:
+                images.append(None)
+                continue
+            url = "https://latex.codecogs.com/png.image?" + urllib.parse.quote("\\bg{white} " + line)
+            try:
+                async with session.get(url, timeout=10) as resp:
+                    if resp.status != 200:
+                        logging.warning(f"CodeCogs returned {resp.status} for: {line[:80]}")
+                        return None
                     data = await resp.read()
-                    img = Image.open(io.BytesIO(data)).convert("RGBA")
-                    pad = 20
-                    padded = Image.new("RGBA", (img.width + pad * 2, img.height + pad * 2), "white")
-                    padded.paste(img, (pad, pad))
-                    buf = io.BytesIO()
-                    padded.save(buf, format="PNG")
-                    buf.seek(0)
-                    return discord.File(buf, filename=filename)
-                logging.warning(f"CodeCogs returned {resp.status}")
+                    images.append(Image.open(io.BytesIO(data)).convert("RGBA"))
+            except Exception as e:
+                logging.warning(f"CodeCogs error: {e}")
                 return None
-        except Exception as e:
-            logging.warning(f"CodeCogs error: {e}")
+        rendered = [i for i in images if i is not None]
+        if not rendered:
             return None
+        width = max(i.width for i in rendered) + pad * 2
+        y = pad
+        for img in images:
+            if img is None:
+                y += para_gap
+            else:
+                y += img.height + line_gap
+        canvas = Image.new("RGBA", (width, y), "white")
+        y = pad
+        for img in images:
+            if img is None:
+                y += para_gap
+            else:
+                canvas.paste(img, ((width - img.width) // 2, y))
+                y += img.height + line_gap
+        buf = io.BytesIO()
+        canvas.save(buf, format="PNG")
+        buf.seek(0)
+        return discord.File(buf, filename=filename)
 
 # ---------- API Helpers ----------
 async def api_get(endpoint, params=None):
@@ -268,7 +380,7 @@ async def practice(interaction: discord.Interaction, competition: str, topic: st
             await interaction.followup.send(embed=embed, file=image_file)
         else:
             # Fallback to raw text
-            await interaction.followup.send(f"```latex\n{problem_text}\n```")
+            await interaction.followup.send(f"```latex\n{data['problem_text']}\n```")
             await interaction.followup.send("Type `/answer YOUR_ANSWER` to check.")
 
     except Exception as e:
