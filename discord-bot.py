@@ -198,7 +198,8 @@ def line_formula(seg):
         if len(text) > 100:
             return "\\large\\text{\\parbox{13cm}{" + text + "}}"
         return "\\large\\text{" + text + "}"
-    return "\\large " + " ".join("\\text{" + t + "}" if k == "text" else t for k, t in parts)
+    body = "".join(t if k == "text" else f"\\ensuremath{{{t}}}" for k, t in parts)
+    return "\\large\\text{\\parbox{13cm}{" + body + "}}"
 
 def text_to_lines(text):
     """Split text into per-line formulas; None marks a paragraph break."""
