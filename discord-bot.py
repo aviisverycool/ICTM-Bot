@@ -160,7 +160,7 @@ def problem_formula(comp_name, problem_id, problem_text, choices=None):
 def solution_formula(result_text, solution_text=None):
     body = [text_to_tex(result_text)]
     if solution_text:
-        body.append(r"\textbf{Solution:}\ " + text_to_tex(solution_text))
+        body.append(r"\textbf{Solution:}\ " + latex_body(solution_text))
     return "\\large\\text{\\parbox{13cm}{" + "\\\\[8pt]".join(body) + "}}"
 
 async def render_latex(formula, filename="latex.png"):
@@ -301,6 +301,9 @@ async def answer(interaction: discord.Interaction, answer: str):
             color = discord.Color.red()
 
         solution_text = data.get("solution_text")
+        full_text = f"{result_text}"
+        if solution_text:
+            full_text += f"\n\n**Solution:** {solution_text.strip()}"
         formula = solution_formula(result_text, solution_text.strip() if solution_text else None)
 
         image_file = await render_latex(formula, "solution.png")
