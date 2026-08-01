@@ -38,8 +38,8 @@ ENV_PATTERN = r"\\begin\{(?P<env>\w+\*?)\}(?P<envbody>.*?)\\end\{(?P=env)\}"
 MATH_PATTERN = re.compile(
     r"(?P<envm>" + ENV_PATTERN + r")"
     r"|(?P<inl>\$(?P<inlbody>[^$]*)\$)"
-    r"|(?P<paren>\\\((?P<parenbody>.*?)\\\))"
-    r"|(?P<disp>\\\[(?P<dispbody>.*?)\\\])",
+    r"|(?P<paren>\\+\((?P<parenbody>.*?)\\+\))"
+    r"|(?P<disp>\\+\[(?P<dispbody>.*?)\\+\])",
     re.DOTALL,
 )
 ENV_MAP = {"align*": "aligned", "align": "aligned", "gather*": "gathered", "gather": "gathered"}
