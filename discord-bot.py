@@ -165,6 +165,46 @@ def normalize_math_newlines(text):
     out.append(text[pos:])
     return "".join(out)
 
+OPEN_PUNCT = "([{"
+CLOSE_PUNCT = ")],;:!?."
+
+def join_with_spacing(parts):
+    """
+    Join text/math parts, inserting spaces between adjacent parts unless
+    punctuation rules say otherwise. Avoids double spaces.
+    """
+    pieces = []
+    for idx, (k, t) in enumerate(parts):
+        # Prepare token: text parts stay as-is, math parts get wrapped
+        token = t if k == "text" else f"\\ensuremath{{{t}}}"
+        if idx == 0:
+            pieces.append(token)
+            continue
+
+        # Decide whether to add a space before this token
+        add_space = True
+
+        # 1) No space before punctuation that usually follows without a space
+        if k == "text" and t and t[0] in CLOSE_PUNCT:
+            add_space = False
+
+        # 2) No space after opening punctuation
+        prev_k, prev_t = parts[idx - 1]
+        if prev_k == "text" and prev_t and prev_t[-1] in OPEN_PUNCT:
+            add_space = False
+
+        # 3) Avoid double spaces: if previous token already ends with a space
+        #    or current token starts with a space, don't add another
+        if pieces[-1].endswith(" ") or t.startswith(" "):
+            add_space = False
+
+        if add_space:
+            pieces.append(" " + token)
+        else:
+            pieces.append(token)
+
+    return "".join(pieces)
+
 def line_formula(seg):
     """Convert one source line into a CodeCogs-renderable formula."""
     parts = []
@@ -219,27 +259,6 @@ def text_to_lines(text):
             lines.append(f)
     return lines
 
-OPEN_PUNCT = "([{"
-CLOSE_PUNCT = ")],;:!?."
-
-def join_with_spacing(parts):
-    """Join text/math parts, spacing adjacent spans so 'is $x$' isn't 'isx'."""
-    pieces = []
-    for idx, (k, t) in enumerate(parts):
-        token = t if k == "text" else f"\\ensuremath{{{t}}}"
-        if idx == 0:
-            pieces.append(token)
-            continue
-        prev_k, prev_t = parts[idx - 1]
-        if k == "text":
-            glue = t[0] in CLOSE_PUNCT or (t.startswith("-") and len(t) > 1)
-        elif prev_k == "text":
-            glue = prev_t[-1] in OPEN_PUNCT
-        else:
-            glue = False
-        pieces.append(("" if glue else " ") + token)
-    return "".join(pieces)
-
 def choices_line(choices):
     """Format answer choices as a single formula line."""
     parts = [("text", "\\textbf{Choices:}")]
@@ -253,7 +272,12 @@ def choices_line(choices):
                 parts.append(("math", math))
         else:
             parts.append(("text", escape_latex_text(v)))
-    return "\\large " + " ".join("\\text{" + t + "}" if k == "text" else t for k, t in parts)
+    # Ensure we always have a space after the choice letter
+    # The join_with_spacing will handle the spacing between parts,
+    # but we need to make sure the text part for the letter ends with a space.
+    # We already have that in the text part f"({letter}) ".
+    body = join_with_spacing(parts)
+    return "\\large " + body
 
 def problem_formula(comp_name, problem_id, problem_text, choices=None):
     """Build a list of per-line formulas (None = paragraph break)."""
