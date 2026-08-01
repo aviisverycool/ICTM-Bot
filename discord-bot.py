@@ -4,7 +4,6 @@ import discord
 from discord import app_commands
 import aiohttp
 from dotenv import load_dotenv
-import asyncio
 import logging
 import urllib.parse
 import io
@@ -20,6 +19,8 @@ API_BASE = os.getenv("API_BASE_URL")
 if not TOKEN or not API_BASE:
     raise ValueError("Missing DISCORD_BOT_TOKEN or API_BASE_URL in .env file.")
 
+# Latest active problem per channel: channel_id -> problem_id.
+# Posting a new problem overwrites the old one.
 channel_problems = {}
 
 # ---------- LaTeX Renderer (CodeCogs PNG) ----------
@@ -260,24 +261,20 @@ def text_to_lines(text):
     return lines
 
 def choices_line(choices):
-    """Format answer choices as a single formula line."""
+    """Format answer choices as a single formula line (text mode)."""
     parts = [("text", "\\textbf{Choices:}")]
     for letter, value in sorted(choices.items()):
         v = value.replace("$", "").strip()
         parts.append(("math", "\\quad"))
         parts.append(("text", f"({letter}) "))
-        if "\\" in v or "$" in v:
+        if "\\" in v:
             math = clean_math(v)
             if math:
                 parts.append(("math", math))
         else:
-            parts.append(("text", escape_latex_text(v)))
-    # Ensure we always have a space after the choice letter
-    # The join_with_spacing will handle the spacing between parts,
-    # but we need to make sure the text part for the letter ends with a space.
-    # We already have that in the text part f"({letter}) ".
+            parts.extend(text_to_formula_parts(v))
     body = join_with_spacing(parts)
-    return "\\large " + body
+    return "\\large\\text{\\parbox{13cm}{" + body + "}}"
 
 def problem_formula(comp_name, problem_id, problem_text, choices=None):
     """Build a list of per-line formulas (None = paragraph break)."""
@@ -325,12 +322,13 @@ async def render_latex(lines, filename="latex.png"):
                 async with session.get(url, timeout=10) as resp:
                     if resp.status != 200:
                         logging.warning(f"CodeCogs returned {resp.status} for: {line[:80]}")
-                        return None
+                        images.append(None)
+                        continue
                     data = await resp.read()
                     images.append(Image.open(io.BytesIO(data)).convert("RGBA"))
             except Exception as e:
                 logging.warning(f"CodeCogs error: {e}")
-                return None
+                images.append(None)
         rendered = [i for i in images if i is not None]
         if not rendered:
             return None
@@ -513,8 +511,11 @@ async def answer(interaction: discord.Interaction, answer: str):
             color = discord.Color.green()
         else:
             correct = data.get("correct_answer", "unknown")
-            result_text = f"❌ Incorrect. Correct answer: `{correct}`"
+            result_text = f"❌ Incorrect. Correct answer: {correct}"
             color = discord.Color.red()
+
+        # The correct answer is revealed either way, so clear the active problem
+        del channel_problems[interaction.channel_id]
 
         solution_text = data.get("solution_text")
         full_text = f"{result_text}"
