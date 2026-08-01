@@ -254,6 +254,16 @@ def solution_formula(result_text, solution_text=None):
         lines.extend(text_to_lines(solution_text))
     return lines
 
+def to_aspect_ratio(img, ratio_w=4, ratio_h=3, bg="white"):
+    """Pad an image to the given aspect ratio (w:h), centering content."""
+    w, h = img.size
+    target_w = max(w, -(-(h * ratio_w) // ratio_h))
+    target_w = -(-target_w // ratio_w) * ratio_w
+    target_h = target_w * ratio_h // ratio_w
+    canvas = Image.new("RGBA", (target_w, target_h), bg)
+    canvas.paste(img, ((target_w - w) // 2, (target_h - h) // 2))
+    return canvas
+
 async def render_latex(lines, filename="latex.png"):
     """Render per-line LaTeX formulas, stacked into one padded PNG image."""
     pad = 16
@@ -294,6 +304,7 @@ async def render_latex(lines, filename="latex.png"):
             else:
                 canvas.paste(img, ((width - img.width) // 2, y))
                 y += img.height + line_gap
+        canvas = to_aspect_ratio(canvas)
         buf = io.BytesIO()
         canvas.save(buf, format="PNG")
         buf.seek(0)
