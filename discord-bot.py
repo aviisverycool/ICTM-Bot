@@ -310,6 +310,38 @@ async def render_latex(lines, filename="latex.png"):
         buf.seek(0)
         return discord.File(buf, filename=filename)
 
+# ---------- Image Helpers ----------
+def resolve_image_urls(image_url):
+    """Return candidate absolute URLs for an API-relative image path."""
+    if not image_url:
+        return []
+    if image_url.startswith("http://") or image_url.startswith("https://"):
+        return [image_url]
+    base_parts = urllib.parse.urlsplit(API_BASE)
+    host_root = f"{base_parts.scheme}://{base_parts.netloc}/"
+    if image_url.startswith("/api/"):
+        return [host_root + image_url[len("/api/"):], host_root + image_url]
+    return [host_root + image_url]
+
+async def fetch_image_file(image_url, filename="diagram.png"):
+    """Fetch a problem diagram from the first working URL, as a discord.File."""
+    async with aiohttp.ClientSession() as session:
+        for url in resolve_image_urls(image_url):
+            try:
+                async with session.get(url, timeout=10) as resp:
+                    if resp.status == 200:
+                        data = await resp.read()
+                        if not data:
+                            continue
+                        img = Image.open(io.BytesIO(data)).convert("RGBA")
+                        buf = io.BytesIO()
+                        img.save(buf, format="PNG")
+                        buf.seek(0)
+                        return discord.File(buf, filename=filename)
+            except Exception as e:
+                logging.warning(f"Image fetch error for {url}: {e}")
+    return None
+
 # ---------- API Helpers ----------
 async def api_get(endpoint, params=None):
     async with aiohttp.ClientSession() as session:
@@ -382,6 +414,10 @@ async def practice(interaction: discord.Interaction, competition: str, topic: st
 
         # Render as image
         image_file = await render_latex(formula, "problem.png")
+        diagram_file = None
+        if data.get("image_url"):
+            diagram_file = await fetch_image_file(data["image_url"], "diagram.png")
+
         if image_file:
             embed = discord.Embed(
                 title=f"📐 {data.get('competition_name', 'Unknown')} - Problem {data['problem_id']}",
@@ -389,7 +425,18 @@ async def practice(interaction: discord.Interaction, competition: str, topic: st
             )
             embed.set_image(url="attachment://problem.png")
             embed.set_footer(text="Type /answer YOUR_ANSWER to check.")
-            await interaction.followup.send(embed=embed, file=image_file)
+            if diagram_file:
+                diagram_embed = discord.Embed(
+                    title="📊 Diagram",
+                    color=discord.Color.blue()
+                )
+                diagram_embed.set_image(url="attachment://diagram.png")
+                await interaction.followup.send(
+                    embeds=[embed, diagram_embed],
+                    files=[image_file, diagram_file]
+                )
+            else:
+                await interaction.followup.send(embed=embed, file=image_file)
         else:
             # Fallback to raw text
             await interaction.followup.send(f"```latex\n{data['problem_text']}\n```")
