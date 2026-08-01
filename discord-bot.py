@@ -302,8 +302,8 @@ def to_aspect_ratio(img, ratio_w=4, ratio_h=3, bg="white"):
     target_w = max(w, -(-(h * ratio_w) // ratio_h))
     target_w = -(-target_w // ratio_w) * ratio_w
     target_h = target_w * ratio_h // ratio_w
-    canvas = Image.new("RGBA", (target_w, target_h), bg)
-    canvas.paste(img, ((target_w - w) // 2, (target_h - h) // 2))
+    canvas = Image.new("RGB", (target_w, target_h), bg)
+    canvas.paste(img, ((target_w - w) // 2, (target_h - h) // 2), img if img.mode == "RGBA" else None)
     return canvas
 
 async def render_latex(lines, filename="latex.png"):
@@ -339,13 +339,13 @@ async def render_latex(lines, filename="latex.png"):
                 y += para_gap
             else:
                 y += img.height + line_gap
-        canvas = Image.new("RGBA", (width, y), "white")
+        canvas = Image.new("RGB", (width, y), "white")
         y = pad
         for img in images:
             if img is None:
                 y += para_gap
             else:
-                canvas.paste(img, ((width - img.width) // 2, y))
+                canvas.paste(img, ((width - img.width) // 2, y), img)
                 y += img.height + line_gap
         canvas = to_aspect_ratio(canvas)
         buf = io.BytesIO()
@@ -377,8 +377,10 @@ async def fetch_image_file(image_url, filename="diagram.png"):
                         if not data:
                             continue
                         img = Image.open(io.BytesIO(data)).convert("RGBA")
+                        flat = Image.new("RGB", img.size, "white")
+                        flat.paste(img, (0, 0), img)
                         buf = io.BytesIO()
-                        img.save(buf, format="PNG")
+                        flat.save(buf, format="PNG")
                         buf.seek(0)
                         return discord.File(buf, filename=filename)
             except Exception as e:
