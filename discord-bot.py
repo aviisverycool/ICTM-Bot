@@ -20,7 +20,7 @@ API_BASE = os.getenv("API_BASE_URL")
 if not TOKEN or not API_BASE:
     raise ValueError("Missing DISCORD_BOT_TOKEN or API_BASE_URL in .env file.")
 
-user_problems = {}
+channel_problems = {}
 
 # ---------- LaTeX Renderer (CodeCogs PNG) ----------
 # NOTE: CodeCogs parses the entire query string as the formula, so appending
@@ -447,7 +447,7 @@ async def practice(interaction: discord.Interaction, competition: str, topic: st
             await interaction.followup.send("❌ Invalid API response.", ephemeral=True)
             return
 
-        user_problems[interaction.user.id] = data["problem_id"]
+        channel_problems[interaction.channel_id] = data["problem_id"]
 
         # Build the LaTeX formula (header, problem text, choices)
         formula = problem_formula(
@@ -498,9 +498,9 @@ async def answer(interaction: discord.Interaction, answer: str):
     await interaction.response.defer()
 
     try:
-        problem_id = user_problems.get(interaction.user.id)
+        problem_id = channel_problems.get(interaction.channel_id)
         if not problem_id:
-            await interaction.followup.send("No active problem. Use `/practice` first.", ephemeral=True)
+            await interaction.followup.send("No active problem in this channel. Use `/practice` first.", ephemeral=True)
             return
 
         data = await api_post(f"/problems/{problem_id}/check", data={"answer": answer})
