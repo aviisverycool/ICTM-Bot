@@ -198,7 +198,7 @@ def line_formula(seg):
         if len(text) > 100:
             return "\\large\\text{\\parbox{13cm}{" + text + "}}"
         return "\\large\\text{" + text + "}"
-    body = "".join(t if k == "text" else f"\\ensuremath{{{t}}}" for k, t in parts)
+    body = join_with_spacing(parts)
     return "\\large\\text{\\parbox{13cm}{" + body + "}}"
 
 def text_to_lines(text):
@@ -218,6 +218,27 @@ def text_to_lines(text):
         if f:
             lines.append(f)
     return lines
+
+OPEN_PUNCT = "([{"
+CLOSE_PUNCT = ")],;:!?."
+
+def join_with_spacing(parts):
+    """Join text/math parts, spacing adjacent spans so 'is $x$' isn't 'isx'."""
+    pieces = []
+    for idx, (k, t) in enumerate(parts):
+        token = t if k == "text" else f"\\ensuremath{{{t}}}"
+        if idx == 0:
+            pieces.append(token)
+            continue
+        prev_k, prev_t = parts[idx - 1]
+        if k == "text":
+            glue = t[0] in CLOSE_PUNCT or (t.startswith("-") and len(t) > 1)
+        elif prev_k == "text":
+            glue = prev_t[-1] in OPEN_PUNCT
+        else:
+            glue = False
+        pieces.append(("" if glue else " ") + token)
+    return "".join(pieces)
 
 def choices_line(choices):
     """Format answer choices as a single formula line."""
